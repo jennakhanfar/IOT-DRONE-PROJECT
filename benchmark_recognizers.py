@@ -456,11 +456,15 @@ class DroneFaceDataset(Dataset):
 
 # ── Benchmark engine ─────────────────────────────────────────────────────────
 
-def benchmark_model(wrapped_model, dataset, batch_size=1):
+def benchmark_model(wrapped_model, dataset, batch_size=1, constrained=False):
     """
     Run a recognition model through the dataset in eval mode.
     Works with both PyTorch and ONNX models via ModelWrapper.
+
+    If constrained=True, model inference runs inside DroneInferenceContext
+    (400MHz single core, 128MB RAM delta). Data loading runs at full PC speed.
     """
+    from drone_constraints import DroneInferenceContext
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
                         num_workers=0)
 
@@ -468,12 +472,23 @@ def benchmark_model(wrapped_model, dataset, batch_size=1):
     all_embeddings = []
     all_labels = []
     latencies_ms = []
+    peak_ram_mb = 0.0
 
     print("  [bench] Extracting embeddings (%d images)..." % len(dataset))
     for batch_idx, (images, labels) in enumerate(loader):
-        t0 = time.perf_counter()
-        emb = wrapped_model.get_embeddings(images)
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        # images loaded at full PC speed — constraint only wraps inference
+        if constrained:
+            ctx = DroneInferenceContext()
+            with ctx:
+                emb = wrapped_model.get_embeddings(images)
+            elapsed_ms = ctx.latency_ms
+            if ctx.peak_ram_mb > peak_ram_mb:
+                peak_ram_mb = ctx.peak_ram_mb
+        else:
+            t0 = time.perf_counter()
+            emb = wrapped_model.get_embeddings(images)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
         latencies_ms.append(elapsed_ms / images.size(0))
 
         # Ensure tensor output
@@ -553,7 +568,7 @@ def benchmark_model(wrapped_model, dataset, batch_size=1):
     p95_latency = sorted(latencies_ms)[p95_idx]
     fps = 1000.0 / avg_latency if avg_latency > 0 else 0
 
-    return {
+    result = {
         "accuracy": round(accuracy, 4),
         "avg_latency_ms": round(avg_latency, 3),
         "median_latency_ms": round(med_latency, 3),
@@ -564,6 +579,9 @@ def benchmark_model(wrapped_model, dataset, batch_size=1):
         "num_samples": total,
         "num_classes": num_classes,
     }
+    if constrained:
+        result["peak_inference_ram_mb"] = round(peak_ram_mb, 1)
+    return result
 
 
 def benchmark_droneface_by_condition(wrapped_model, dataset):
@@ -712,8 +730,8 @@ def main():
         parser.error("Specify --model or --all")
 
     if args.constrained:
-        from drone_constraints import apply_drone_constraints
-        apply_drone_constraints()
+        from drone_constraints import print_constraint_summary
+        print_constraint_summary()
 
     model_names = list(MODEL_REGISTRY.keys()) if args.all else [args.model]
 
@@ -747,7 +765,7 @@ def main():
 
         print("[bench] %d images, %d identities" % (len(dataset), len(dataset.classes)))
 
-        result = benchmark_model(wrapped_model, dataset)
+        result = benchmark_model(wrapped_model, dataset, constrained=args.constrained)
         result["model_name"] = model_name
         result["description"] = desc
         result["dataset"] = args.dataset_type

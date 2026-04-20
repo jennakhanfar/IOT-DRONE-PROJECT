@@ -1,208 +1,234 @@
 """
 drone_constraints.py
 ---------------------
-Simulates drone-level hardware constraints for the detection module.
+Simulates drone-level hardware constraints for model inference ONLY.
 
-Based on HULA drone estimated specs (higher-end of spectrum):
-  - CPU: ARM Cortex-A ~400MHz  → simulated as 15% of one CPU core
-  - RAM: 128MB                 → hard limit on process memory
+Architecture:
+  - PC side  : loads images, runs data pipeline, displays results  (full CPU/RAM)
+  - Drone side: runs face recognition model inference               (400MHz / 128MB)
 
-HOW TO INTEGRATE THIS:
-------------------------------
-Add these TWO lines at the top of main.py, before anything else:
+Usage:
+    from drone_constraints import DroneInferenceContext
 
-    from drone_constraints import apply_drone_constraints
-    apply_drone_constraints()
+    with DroneInferenceContext() as ctx:
+        embeddings = model.get_embeddings(images)
 
-That's it. The rest of the code runs as normal, just under constrained resources.
-
-WORKS ON: Windows, Mac, Linux — no extra installs needed.
+    print(ctx.peak_ram_mb)   # peak RAM used during inference
+    print(ctx.latency_ms)    # wall-clock time under constraint
 """
 
 import os
 import time
 import threading
 import platform
-
-# RAM limiting — different per OS
-_IS_WINDOWS = platform.system() == "Windows"
-if _IS_WINDOWS:
-    import ctypes
-    import ctypes.wintypes
-else:
-    import resource
+import ctypes
+import ctypes.wintypes
 
 # ── Drone hardware spec constants ─────────────────────────────────────────────
-DRONE_RAM_MB       = 128    # estimated max RAM (higher-end of HULA spec)
-DRONE_CPU_FRACTION = 0.15   # 400MHz / ~2600MHz modern core ≈ 15%
-CPU_THROTTLE_MS    = 50     # throttle check interval in ms
+DRONE_RAM_MB    = 128   # RAM budget for model inference on drone
+DRONE_CPU_MHZ   = 400   # target drone CPU speed in MHz
+THROTTLE_MS     = 50    # throttle window size in ms
+
+_IS_WINDOWS = platform.system() == "Windows"
 
 
-# ── RAM limit (Windows-only structures) ──────────────────────────────────────
-
-if _IS_WINDOWS:
-    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
-        _fields_ = [
-            ("PerProcessUserTimeLimit", ctypes.c_int64),
-            ("PerJobUserTimeLimit",     ctypes.c_int64),
-            ("LimitFlags",              ctypes.wintypes.DWORD),
-            ("MinimumWorkingSetSize",   ctypes.c_size_t),
-            ("MaximumWorkingSetSize",   ctypes.c_size_t),
-            ("ActiveProcessLimit",      ctypes.wintypes.DWORD),
-            ("Affinity",                ctypes.c_size_t),
-            ("PriorityClass",           ctypes.wintypes.DWORD),
-            ("SchedulingClass",         ctypes.wintypes.DWORD),
-        ]
-
-    class _IO_COUNTERS(ctypes.Structure):
-        _fields_ = [
-            ("ReadOperationCount",  ctypes.c_uint64),
-            ("WriteOperationCount", ctypes.c_uint64),
-            ("OtherOperationCount", ctypes.c_uint64),
-            ("ReadTransferCount",   ctypes.c_uint64),
-            ("WriteTransferCount",  ctypes.c_uint64),
-            ("OtherTransferCount",  ctypes.c_uint64),
-        ]
-
-    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
-        _fields_ = [
-            ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
-            ("IoInfo",                _IO_COUNTERS),
-            ("ProcessMemoryLimit",    ctypes.c_size_t),
-            ("JobMemoryLimit",        ctypes.c_size_t),
-            ("PeakProcessMemoryUsed", ctypes.c_size_t),
-            ("PeakJobMemoryUsed",     ctypes.c_size_t),
-        ]
-
-
-def _apply_ram_limit(ram_mb):
-    ram_bytes = ram_mb * 1024 * 1024
-
-    if platform.system() == "Windows":
-        try:
-            JOB_OBJECT_LIMIT_PROCESS_MEMORY    = 0x00000100
-            JobObjectExtendedLimitInformation  = 9
-
-            job = ctypes.windll.kernel32.CreateJobObjectW(None, None)
-            if not job:
-                raise OSError("CreateJobObjectW failed")
-
-            info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY
-            info.ProcessMemoryLimit = ram_bytes
-
-            ok = ctypes.windll.kernel32.SetInformationJobObject(
-                job,
-                JobObjectExtendedLimitInformation,
-                ctypes.byref(info),
-                ctypes.sizeof(info),
-            )
-            if not ok:
-                raise OSError("SetInformationJobObject failed (error %d)" %
-                              ctypes.windll.kernel32.GetLastError())
-
-            ok = ctypes.windll.kernel32.AssignProcessToJobObject(
-                job,
-                ctypes.windll.kernel32.GetCurrentProcess()
-            )
-            if not ok:
-                raise OSError("AssignProcessToJobObject failed (error %d)" %
-                              ctypes.windll.kernel32.GetLastError())
-
-            print("[DRONE SIM] RAM limited to %d MB (Windows Job Object)" % ram_mb)
-
-        except Exception as e:
-            print("[DRONE SIM] WARNING: Could not set RAM limit on Windows: %s" % e)
-            print("[DRONE SIM] Continuing without RAM constraint.")
-    else:
-        try:
-            resource.setrlimit(resource.RLIMIT_AS, (ram_bytes, ram_bytes))
-            print("[DRONE SIM] RAM limited to %d MB" % ram_mb)
-        except Exception as e:
-            print("[DRONE SIM] WARNING: Could not set RAM limit: %s" % e)
-            print("[DRONE SIM] Continuing without RAM constraint.")
-
-
-# ── CPU throttle ──────────────────────────────────────────────────────────────
-
-def _cpu_throttle_worker(cpu_fraction, interval_ms):
-    """
-    Daemon thread that enforces CPU throttle by sleeping.
-    Active for cpu_fraction of each interval, sleeping for the rest.
-    e.g. 0.15 fraction = 15ms active, 85ms sleep per 100ms window.
-    """
-    interval_s  = interval_ms / 1000.0
-    active_time = interval_s * cpu_fraction
-    sleep_time  = interval_s * (1.0 - cpu_fraction)
-    while True:
-        time.sleep(active_time)
-        time.sleep(sleep_time)
-
-
-def _apply_cpu_throttle(cpu_fraction):
-    # Pin to single core
+def _detect_cpu_mhz():
     try:
-        os.sched_setaffinity(0, {0})
-        print("[DRONE SIM] CPU affinity set to core 0 (single core)")
-    except AttributeError:
-        # macOS doesn't support sched_setaffinity — try Windows fallback or skip
+        import psutil
+        freq = psutil.cpu_freq()
+        if freq and freq.max > 0:
+            return freq.max
+    except Exception:
+        pass
+    return 2600.0
+
+
+_HOST_CPU_MHZ = _detect_cpu_mhz()
+_CPU_FRACTION = min(max(DRONE_CPU_MHZ / _HOST_CPU_MHZ, 0.01), 1.0)
+
+
+# ── CPU affinity helpers ───────────────────────────────────────────────────────
+
+def _pin_to_core(core=0):
+    try:
         if _IS_WINDOWS:
-            try:
-                ctypes.windll.kernel32.SetProcessAffinityMask(
-                    ctypes.windll.kernel32.GetCurrentProcess(), 1)
-                print("[DRONE SIM] CPU affinity set to core 0 (Windows)")
-            except Exception as e:
-                print("[DRONE SIM] WARNING: Could not set CPU affinity: %s" % e)
+            ctypes.windll.kernel32.SetProcessAffinityMask(
+                ctypes.windll.kernel32.GetCurrentProcess(), 1 << core)
         else:
-            print("[DRONE SIM] WARNING: CPU affinity not supported on macOS (skipped)")
-    except Exception as e:
-        print("[DRONE SIM] WARNING: Could not set CPU affinity: %s" % e)
-
-    # Start throttle thread
-    t = threading.Thread(
-        target=_cpu_throttle_worker,
-        args=(cpu_fraction, CPU_THROTTLE_MS),
-        daemon=True,
-    )
-    t.start()
-    print("[DRONE SIM] CPU throttled to %.0f%% of one core (~400MHz equivalent)"
-          % (cpu_fraction * 100))
+            os.sched_setaffinity(0, {core})
+        return True
+    except Exception:
+        return False
 
 
-# ── Main entry point ──────────────────────────────────────────────────────────
+def _restore_all_cores():
+    try:
+        import psutil
+        mask = (1 << psutil.cpu_count(logical=True)) - 1
+        if _IS_WINDOWS:
+            ctypes.windll.kernel32.SetProcessAffinityMask(
+                ctypes.windll.kernel32.GetCurrentProcess(), mask)
+        else:
+            os.sched_setaffinity(0, set(range(psutil.cpu_count(logical=True))))
+    except Exception:
+        pass
 
-def apply_drone_constraints(
-    ram_mb=DRONE_RAM_MB,
-    cpu_fraction=DRONE_CPU_FRACTION,
-):
+
+# ── CPU throttle thread ────────────────────────────────────────────────────────
+
+class _ThrottleThread(threading.Thread):
     """
-    Apply drone-level hardware constraints to the current process.
-    Call once at the very start of main.py before any model loading.
-
-    Parameters
-    ----------
-    ram_mb       : int   -- RAM cap in MB        (default: 128)
-    cpu_fraction : float -- fraction of one core (default: 0.15 → ~400MHz)
+    Daemon thread that throttles CPU to drone speed by sleeping.
+    Only throttles while active_event is set.
     """
-    print("\n" + "=" * 50)
-    print("  DRONE HARDWARE CONSTRAINTS ACTIVE")
-    print("=" * 50)
-    print("  Device : HULA drone (higher-end estimate)")
-    print("  CPU    : ARM ~400MHz → %.0f%% of one modern core" % (cpu_fraction * 100))
-    print("  RAM    : %d MB hard limit" % ram_mb)
-    print("  OS     : %s" % platform.system())
-    print("=" * 50 + "\n")
 
-    _apply_ram_limit(ram_mb)
-    _apply_cpu_throttle(cpu_fraction)
+    def __init__(self, fraction, interval_ms):
+        super(_ThrottleThread, self).__init__(daemon=True)
+        self.active_event = threading.Event()
+        self._fraction = fraction
+        self._interval_s = interval_ms / 1000.0
+
+    def run(self):
+        active_s = self._interval_s * self._fraction
+        sleep_s  = self._interval_s * (1.0 - self._fraction)
+        while True:
+            if self.active_event.is_set():
+                time.sleep(active_s)
+                time.sleep(sleep_s)
+            else:
+                time.sleep(0.005)  # idle check
 
 
-# ── Quick self-test ───────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    apply_drone_constraints()
-    print("[TEST] Running constrained workload...")
-    start = time.time()
-    total = sum(range(1_000_000))
-    elapsed = time.time() - start
-    print("[TEST] Done in %.2f s (under constraint)" % elapsed)
-    print("[TEST] Sum: %d" % total)
+# Single shared throttle thread (started once, paused when not in context)
+_throttle_thread = None
+_throttle_lock   = threading.Lock()
+
+
+def _get_throttle_thread():
+    global _throttle_thread
+    with _throttle_lock:
+        if _throttle_thread is None:
+            _throttle_thread = _ThrottleThread(_CPU_FRACTION, THROTTLE_MS)
+            _throttle_thread.start()
+    return _throttle_thread
+
+
+# ── RAM monitor ────────────────────────────────────────────────────────────────
+
+class _RamMonitor(threading.Thread):
+    """
+    Monitors RSS during inference. Kills the process if it exceeds
+    baseline_mb + DRONE_RAM_MB (hard enforcement).
+    """
+
+    def __init__(self, baseline_mb, limit_mb):
+        super(_RamMonitor, self).__init__(daemon=True)
+        self.baseline_mb = baseline_mb
+        self.limit_mb    = limit_mb
+        self.peak_mb     = baseline_mb
+        self.exceeded    = False
+        self._stop_event = threading.Event()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def run(self):
+        import psutil
+        proc = psutil.Process(os.getpid())
+        while not self._stop_event.is_set():
+            try:
+                rss_mb = proc.memory_info().rss / (1024 * 1024)
+                if rss_mb > self.peak_mb:
+                    self.peak_mb = rss_mb
+                delta_mb = rss_mb - self.baseline_mb
+                if delta_mb > self.limit_mb:
+                    self.exceeded = True
+                    print(
+                        "\n[DRONE SIM] *** OUT OF MEMORY ***"
+                        "\n[DRONE SIM] Inference used %.1f MB over baseline "
+                        "(drone limit: %d MB). Terminating." % (delta_mb, self.limit_mb)
+                    )
+                    os.kill(os.getpid(), 9)
+            except Exception:
+                pass
+            time.sleep(0.02)  # check every 20ms
+
+
+# ── Context manager ────────────────────────────────────────────────────────────
+
+class DroneInferenceContext(object):
+    """
+    Context manager that applies drone constraints only during inference.
+
+    PC side (outside context) : full CPU, full RAM — data loading, GUI, etc.
+    Drone side (inside context): 400MHz single core, 128MB RAM — model inference.
+
+    Example
+    -------
+        ctx = DroneInferenceContext()
+        with ctx:
+            emb = model.get_embeddings(images)
+        print("%.1f ms | %.1f MB peak" % (ctx.latency_ms, ctx.delta_ram_mb))
+    """
+
+    def __init__(self, ram_mb=DRONE_RAM_MB):
+        self.ram_mb       = ram_mb
+        self.latency_ms   = 0.0
+        self.peak_ram_mb  = 0.0
+        self.delta_ram_mb = 0.0
+        self._t0          = None
+        self._ram_monitor = None
+        self._baseline_mb = 0.0
+
+    def __enter__(self):
+        import psutil
+        proc = psutil.Process(os.getpid())
+        self._baseline_mb = proc.memory_info().rss / (1024 * 1024)
+
+        # Pin to single core + enable CPU throttle
+        _pin_to_core(0)
+        _get_throttle_thread().active_event.set()
+
+        # Start RAM monitor (hard-kills if inference exceeds 128MB delta)
+        self._ram_monitor = _RamMonitor(self._baseline_mb, self.ram_mb)
+        self._ram_monitor.start()
+
+        self._t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        elapsed = time.perf_counter() - self._t0
+        self.latency_ms = elapsed * 1000.0
+
+        # Disable throttle + restore all cores
+        _get_throttle_thread().active_event.clear()
+        _restore_all_cores()
+
+        # Stop RAM monitor
+        if self._ram_monitor:
+            self._ram_monitor.stop()
+            self._ram_monitor.join(timeout=0.1)
+            self.peak_ram_mb  = self._ram_monitor.peak_mb
+            self.delta_ram_mb = self.peak_ram_mb - self._baseline_mb
+
+        return False  # do not suppress exceptions
+
+
+# ── Summary printer ────────────────────────────────────────────────────────────
+
+def print_constraint_summary():
+    print("\n" + "=" * 55)
+    print("  DRONE INFERENCE CONSTRAINTS")
+    print("=" * 55)
+    print("  Host CPU   : %.0f MHz (%s)" % (_HOST_CPU_MHZ, platform.processor()[:40]))
+    print("  Drone CPU  : %d MHz -> throttle = %.1f%% of 1 core"
+          % (DRONE_CPU_MHZ, _CPU_FRACTION * 100))
+    print("  Drone RAM  : %d MB hard limit (inference delta only)" % DRONE_RAM_MB)
+    print("  Scope      : model inference only (not data loading)")
+    print("=" * 55 + "\n")
+
+
+# ── Backward-compat shim (old apply_drone_constraints callers) ────────────────
+
+def apply_drone_constraints(**kwargs):
+    print_constraint_summary()
