@@ -1,0 +1,14 @@
+FROM python:3.9-slim
+
+WORKDIR /bench
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy project files
+COPY benchmark_recognizers.py .
+COPY drone_constraints.py .
+COPY show_results.py .
+
+# Datasets and model cache will be mounted at runtime

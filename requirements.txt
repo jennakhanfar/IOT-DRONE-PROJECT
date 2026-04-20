@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------
+# Requirements for benchmarking and compression experiments.
+#
+# NOTE on Python version: Buthaina's drone pipeline requires Python 3.6.7
+# (pyhula SDK). But for benchmarking on your laptop, any Python 3.7+ works.
+# The version pins below are relaxed — pip will find compatible versions
+# for your Python.
+# ---------------------------------------------------------------------------
+
+# ---- Drone SDK (only needed for actual flight commands) ----
+# pyhula               # uncomment + pin version when connecting to the drone
+
+# ---- Deep learning core ----
+torch
+torchvision
+timm                     # for ghostnet and other edge backbones
+
+# ---- Face recognition models ----
+facenet-pytorch            # FaceNet (InceptionResnetV1)
+onnxruntime                # ONNX inference for InsightFace models
+# insightface              # only needed for downloading model packs (not in Docker)
+
+# ---- Numerical + image stack ----
+numpy
+Pillow
+scipy
+opencv-python
+
+# ---- Profiling + system constraints ----
+psutil                   # used by edge_tools.profile_model for RSS tracking
+
+# ---- Evaluation (k-fold, metrics) ----
+scikit-learn
+pandas
+
+# ---- Plotting (optional) ----
+matplotlib
+
+# ---- Misc ----
+tqdm
+PyYAML
