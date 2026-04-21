@@ -47,6 +47,18 @@ _HOST_CPU_MHZ = _detect_cpu_mhz()
 _CPU_FRACTION = min(max(DRONE_CPU_MHZ / _HOST_CPU_MHZ, 0.01), 1.0)
 
 
+def set_drone_cpu_mhz(mhz):
+    """
+    Override the drone CPU target at runtime (for CPU ablation experiments).
+    Must be called BEFORE any DroneInferenceContext is entered.
+    """
+    global DRONE_CPU_MHZ, _CPU_FRACTION, _throttle_thread
+    DRONE_CPU_MHZ = int(mhz)
+    _CPU_FRACTION = min(max(DRONE_CPU_MHZ / _HOST_CPU_MHZ, 0.01), 1.0)
+    # Reset throttle thread so it picks up the new fraction on next use
+    _throttle_thread = None
+
+
 # ── CPU affinity helpers ───────────────────────────────────────────────────────
 
 def _pin_to_core(core=0):

@@ -140,20 +140,40 @@ def _make_facenet():
     return PyTorchModelWrapper("facenet", model, input_size=160)
 
 
+_INSIGHTFACE_PACKS = {
+    "buffalo_sc": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_sc.zip",
+    "buffalo_l":  "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
+    "antelopev2": "https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip",
+}
+
+
 def _ensure_insightface_pack(pack_name):
-    """Download an insightface model pack if not already present. Returns the model dir."""
+    """Download + extract an insightface model pack directly from GitHub releases.
+    Avoids needing the insightface package (which requires VS build tools on py36)."""
     home = os.path.expanduser("~")
     model_dir = os.path.join(home, ".insightface", "models", pack_name)
-    if os.path.isdir(model_dir):
+    if os.path.isdir(model_dir) and any(f.endswith(".onnx") for f in os.listdir(model_dir)):
         return model_dir
-    # Use FaceAnalysis to trigger the download
-    from insightface.app import FaceAnalysis
-    app = FaceAnalysis(
-        name=pack_name,
-        providers=["CPUExecutionProvider"],
-        allowed_modules=["recognition"],
-    )
-    app.prepare(ctx_id=0, det_size=(112, 112))
+
+    if pack_name not in _INSIGHTFACE_PACKS:
+        raise RuntimeError("Unknown insightface pack: %s" % pack_name)
+
+    os.makedirs(model_dir, exist_ok=True)
+    zip_path = os.path.join(model_dir, "%s.zip" % pack_name)
+    url = _INSIGHTFACE_PACKS[pack_name]
+    print("  [bench] Downloading %s pack from %s ..." % (pack_name, url))
+    import urllib.request, zipfile, shutil
+    urllib.request.urlretrieve(url, zip_path)
+    print("  [bench] Extracting %s ..." % pack_name)
+    with zipfile.ZipFile(zip_path, "r") as z:
+        z.extractall(model_dir)
+    os.remove(zip_path)
+    # Flatten single nested subdirectory if present (antelopev2/antelopev2/*.onnx)
+    nested = os.path.join(model_dir, pack_name)
+    if os.path.isdir(nested):
+        for fname in os.listdir(nested):
+            shutil.move(os.path.join(nested, fname), os.path.join(model_dir, fname))
+        os.rmdir(nested)
     return model_dir
 
 
@@ -584,10 +604,33 @@ def benchmark_model(wrapped_model, dataset, batch_size=1, constrained=False):
     return result
 
 
-def benchmark_droneface_by_condition(wrapped_model, dataset):
-    """Break down DroneFace accuracy by height and distance."""
+def _load_group_labels(csv_path):
+    """Load subject -> {attribute: value} mapping from a CSV file."""
+    if not os.path.exists(csv_path):
+        return {}
+    mapping = {}
+    with open(csv_path, "r") as f:
+        header = f.readline().strip().split(",")
+        for line in f:
+            parts = line.strip().split(",")
+            if not parts or not parts[0]:
+                continue
+            row = dict(zip(header, parts))
+            subj = row.pop(header[0])
+            mapping[subj] = row
+    return mapping
+
+
+def benchmark_droneface_by_condition(wrapped_model, dataset, group_csv=None):
+    """Break down DroneFace accuracy by height, distance, and group attributes."""
     if not hasattr(dataset, "metadata"):
         return {}
+
+    group_map = _load_group_labels(group_csv) if group_csv else {}
+    group_attrs = []
+    if group_map:
+        sample_row = next(iter(group_map.values()))
+        group_attrs = list(sample_row.keys())
 
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
     all_embeddings = []
@@ -613,6 +656,8 @@ def benchmark_droneface_by_condition(wrapped_model, dataset):
 
     height_results = defaultdict(lambda: {"correct": 0, "total": 0})
     distance_results = defaultdict(lambda: {"correct": 0, "total": 0})
+    group_results = {attr: defaultdict(lambda: {"correct": 0, "total": 0})
+                     for attr in group_attrs}
 
     for i in range(all_embeddings.size(0)):
         lbl = all_labels[i].item()
@@ -652,6 +697,14 @@ def benchmark_droneface_by_condition(wrapped_model, dataset):
             distance_results[bucket]["correct"] += is_correct
             distance_results[bucket]["total"] += 1
 
+        subj = meta.get("subject")
+        if subj and subj in group_map:
+            for attr in group_attrs:
+                val = group_map[subj].get(attr)
+                if val:
+                    group_results[attr][val]["correct"] += is_correct
+                    group_results[attr][val]["total"] += 1
+
     height_acc = {}
     for k, v in sorted(height_results.items()):
         if v["total"] > 0:
@@ -662,10 +715,25 @@ def benchmark_droneface_by_condition(wrapped_model, dataset):
         if v["total"] > 0:
             distance_acc[k] = round(v["correct"] / v["total"], 4)
 
-    return {
+    group_acc = {}
+    for attr, buckets in group_results.items():
+        attr_acc = {}
+        for k, v in sorted(buckets.items()):
+            if v["total"] > 0:
+                attr_acc[k] = {
+                    "accuracy": round(v["correct"] / v["total"], 4),
+                    "n": v["total"],
+                }
+        if attr_acc:
+            group_acc[attr] = attr_acc
+
+    out = {
         "accuracy_by_height": height_acc,
         "accuracy_by_distance": distance_acc,
     }
+    if group_acc:
+        out["accuracy_by_group"] = group_acc
+    return out
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -717,6 +785,10 @@ def main():
         help="Apply drone hardware constraints before benchmarking.",
     )
     parser.add_argument(
+        "--cpu-mhz", type=int, default=None,
+        help="Drone CPU target in MHz (default: 400). Use for CPU ablation.",
+    )
+    parser.add_argument(
         "--device", default="cpu",
         help="Device (default: cpu). Only affects PyTorch models.",
     )
@@ -724,13 +796,19 @@ def main():
         "--output-dir", default="benchmark_results",
         help="Directory to write JSON results.",
     )
+    parser.add_argument(
+        "--group-csv", default="droneface_groups.csv",
+        help="CSV mapping DroneFace subject -> group attributes (gender, etc.).",
+    )
     args = parser.parse_args()
 
     if not args.model and not args.all:
         parser.error("Specify --model or --all")
 
     if args.constrained:
-        from drone_constraints import print_constraint_summary
+        from drone_constraints import print_constraint_summary, set_drone_cpu_mhz
+        if args.cpu_mhz is not None:
+            set_drone_cpu_mhz(args.cpu_mhz)
         print_constraint_summary()
 
     model_names = list(MODEL_REGISTRY.keys()) if args.all else [args.model]
@@ -771,10 +849,15 @@ def main():
         result["dataset"] = args.dataset_type
         result["constrained"] = args.constrained
         result["input_size"] = input_size
+        if args.constrained:
+            from drone_constraints import DRONE_CPU_MHZ, DRONE_RAM_MB
+            result["cpu_mhz_target"] = DRONE_CPU_MHZ
+            result["ram_mb_limit"] = DRONE_RAM_MB
 
         if args.dataset_type == "droneface":
             print("  [bench] Computing per-condition breakdown...")
-            conditions = benchmark_droneface_by_condition(wrapped_model, dataset)
+            conditions = benchmark_droneface_by_condition(
+                wrapped_model, dataset, group_csv=args.group_csv)
             result["conditions"] = conditions
 
             if conditions.get("accuracy_by_height"):
@@ -785,10 +868,20 @@ def main():
                 print("  [bench] Accuracy by distance:")
                 for d, acc in conditions["accuracy_by_distance"].items():
                     print("    %s : %.2f%%" % (d, acc * 100))
+            if conditions.get("accuracy_by_group"):
+                for attr, buckets in conditions["accuracy_by_group"].items():
+                    print("  [bench] Accuracy by %s:" % attr)
+                    for val, stats in buckets.items():
+                        print("    %s (n=%d) : %.2f%%" % (
+                            val, stats["n"], stats["accuracy"] * 100))
 
         all_results[model_name] = result
 
-        suffix = "constrained" if args.constrained else "unconstrained"
+        if args.constrained:
+            from drone_constraints import DRONE_CPU_MHZ
+            suffix = "constrained_%dmhz" % DRONE_CPU_MHZ
+        else:
+            suffix = "unconstrained"
         fname = "bench_%s_%s_%s.json" % (model_name, args.dataset_type, suffix)
         with open(str(out_dir / fname), "w") as f:
             json.dump(result, f, indent=2)
@@ -797,7 +890,11 @@ def main():
     if all_results:
         print_results_table(all_results)
 
-        suffix = "constrained" if args.constrained else "unconstrained"
+        if args.constrained:
+            from drone_constraints import DRONE_CPU_MHZ
+            suffix = "constrained_%dmhz" % DRONE_CPU_MHZ
+        else:
+            suffix = "unconstrained"
         combined_path = out_dir / ("benchmark_combined_%s_%s.json" % (
             args.dataset_type, suffix))
         with open(str(combined_path), "w") as f:
