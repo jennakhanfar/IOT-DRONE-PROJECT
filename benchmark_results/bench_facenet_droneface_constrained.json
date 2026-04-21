@@ -1,0 +1,35 @@
+{
+  "accuracy": 0.7837,
+  "avg_latency_ms": 77.44,
+  "median_latency_ms": 70.798,
+  "p95_latency_ms": 105.255,
+  "fps": 12.913,
+  "model_size_mb": 106.813,
+  "parameter_count": 27910327,
+  "num_samples": 1364,
+  "num_classes": 11,
+  "peak_inference_ram_mb": 323.5,
+  "model_name": "facenet",
+  "description": "FaceNet InceptionResnetV1 (VGGFace2, ~23.5M params)",
+  "dataset": "droneface",
+  "constrained": true,
+  "input_size": 160,
+  "conditions": {
+    "accuracy_by_height": {
+      "1.5m": 0.783,
+      "3.0m": 0.8006,
+      "4.0m": 0.8182,
+      "5.0m": 0.7331
+    },
+    "accuracy_by_distance": {
+      "2m": 0.7386,
+      "4m": 0.9045,
+      "6m": 0.9697,
+      "8m": 0.9727,
+      "10m": 0.9167,
+      "12m": 0.7864,
+      "14m": 0.6061,
+      "16m": 0.4045
+    }
+  }
+}

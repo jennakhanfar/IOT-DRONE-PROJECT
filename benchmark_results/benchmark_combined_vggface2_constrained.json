@@ -1,0 +1,19 @@
+{
+  "facenet": {
+    "accuracy": 0.9333,
+    "avg_latency_ms": 78.481,
+    "median_latency_ms": 72.017,
+    "p95_latency_ms": 116.819,
+    "fps": 12.742,
+    "model_size_mb": 106.813,
+    "parameter_count": 27910327,
+    "num_samples": 21295,
+    "num_classes": 60,
+    "peak_inference_ram_mb": 396.1,
+    "model_name": "facenet",
+    "description": "FaceNet InceptionResnetV1 (VGGFace2, ~23.5M params)",
+    "dataset": "vggface2",
+    "constrained": true,
+    "input_size": 160
+  }
+}
