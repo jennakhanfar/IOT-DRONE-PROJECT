@@ -493,6 +493,7 @@ def benchmark_model(wrapped_model, dataset, batch_size=1, constrained=False):
     all_labels = []
     latencies_ms = []
     peak_ram_mb = 0.0
+    peak_delta_ram_mb = 0.0
 
     print("  [bench] Extracting embeddings (%d images)..." % len(dataset))
     for batch_idx, (images, labels) in enumerate(loader):
@@ -504,6 +505,8 @@ def benchmark_model(wrapped_model, dataset, batch_size=1, constrained=False):
             elapsed_ms = ctx.latency_ms
             if ctx.peak_ram_mb > peak_ram_mb:
                 peak_ram_mb = ctx.peak_ram_mb
+            if ctx.delta_ram_mb > peak_delta_ram_mb:
+                peak_delta_ram_mb = ctx.delta_ram_mb
         else:
             t0 = time.perf_counter()
             emb = wrapped_model.get_embeddings(images)
@@ -601,6 +604,7 @@ def benchmark_model(wrapped_model, dataset, batch_size=1, constrained=False):
     }
     if constrained:
         result["peak_inference_ram_mb"] = round(peak_ram_mb, 1)
+        result["peak_inference_delta_ram_mb"] = round(peak_delta_ram_mb, 1)
     return result
 
 

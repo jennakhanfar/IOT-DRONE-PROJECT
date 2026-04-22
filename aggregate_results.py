@@ -48,6 +48,34 @@ def fmt_num(x, nd=1):
     return ("%.*f" % (nd, x)) if x is not None else "-"
 
 
+_BASELINES = None
+
+
+def load_baselines(results_dir):
+    global _BASELINES
+    if _BASELINES is not None:
+        return _BASELINES
+    p = Path(results_dir) / "baselines.json"
+    if p.exists():
+        import json as _json
+        with open(str(p), "r") as f:
+            _BASELINES = _json.load(f)
+    else:
+        _BASELINES = {}
+    return _BASELINES
+
+
+def delta_mb(row, baselines):
+    """Return measured delta if present, else compute from peak - baseline."""
+    if row.get("peak_inference_delta_ram_mb") is not None:
+        return row["peak_inference_delta_ram_mb"]
+    peak = row.get("peak_inference_ram_mb")
+    name = row.get("model_name")
+    if peak is None or name not in baselines:
+        return None
+    return max(0.0, round(peak - baselines[name], 1))
+
+
 def write_csv(path, header, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(str(path), "w", newline="") as f:
@@ -63,12 +91,13 @@ def table_model_comparison(rows, out_dir):
     sel = [r for r in rows if r.get("dataset") == "droneface"
            and r.get("cpu_mhz_target") == 400]
     sel.sort(key=lambda r: -r.get("accuracy", 0))
+    baselines = load_baselines(out_dir.parent)
 
     print("\n" + "=" * 95)
     print("  TABLE A: Model comparison (DroneFace @ 400 MHz)")
     print("=" * 95)
     print("%-16s %8s %10s %10s %8s %10s %12s %10s" % (
-        "Model", "Acc%", "Lat(ms)", "P95(ms)", "FPS", "Size(MB)", "Params", "PeakRAM"))
+        "Model", "Acc%", "Lat(ms)", "P95(ms)", "FPS", "Size(MB)", "Params", "DeltaRAM"))
     print("-" * 95)
     csv_rows = []
     for r in sel:
@@ -80,18 +109,18 @@ def table_model_comparison(rows, out_dir):
             fmt_num(r["fps"]),
             fmt_num(r["model_size_mb"], 3),
             "{:,}".format(r["parameter_count"]),
-            fmt_num(r.get("peak_inference_ram_mb")),
+            fmt_num(delta_mb(r, baselines)),
         ))
         csv_rows.append([
             r["model_name"],
             round(r["accuracy"] * 100, 2),
             r["avg_latency_ms"], r["p95_latency_ms"], r["fps"],
             r["model_size_mb"], r["parameter_count"],
-            r.get("peak_inference_ram_mb", ""),
+            delta_mb(r, baselines),
         ])
     write_csv(out_dir / "table_A_model_comparison.csv",
               ["model", "accuracy_pct", "avg_latency_ms", "p95_latency_ms",
-               "fps", "model_size_mb", "params", "peak_ram_mb"],
+               "fps", "model_size_mb", "params", "delta_ram_mb"],
               csv_rows)
 
 
