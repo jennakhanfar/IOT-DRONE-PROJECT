@@ -90,8 +90,15 @@ def _restore_all_cores():
 
 class _ThrottleThread(threading.Thread):
     """
-    Daemon thread that throttles CPU to drone speed by sleeping.
-    Only throttles while active_event is set.
+    Daemon thread that throttles inference CPU to drone speed by competing
+    for the pinned core. Duty cycle: during the "allow" fraction the thread
+    sleeps (inference runs uncontested); during the "suppress" fraction it
+    busy-loops, forcing the OS scheduler to time-slice between it and the
+    inference thread on the single pinned core.
+
+    This works because PyTorch/ONNX CPU kernels release the GIL; a
+    Python-level busy-loop can therefore contend with them for core time
+    even within the same process.
     """
 
     def __init__(self, fraction, interval_ms):
@@ -101,12 +108,22 @@ class _ThrottleThread(threading.Thread):
         self._interval_s = interval_ms / 1000.0
 
     def run(self):
-        active_s = self._interval_s * self._fraction
-        sleep_s  = self._interval_s * (1.0 - self._fraction)
+        allow_s    = self._interval_s * self._fraction
+        suppress_s = self._interval_s * (1.0 - self._fraction)
         while True:
             if self.active_event.is_set():
-                time.sleep(active_s)
-                time.sleep(sleep_s)
+                # "Allow" phase: yield the core so inference runs uncontested.
+                if allow_s > 0:
+                    time.sleep(allow_s)
+                # "Suppress" phase: busy-loop to contend for the pinned core.
+                if suppress_s > 0:
+                    deadline = time.perf_counter() + suppress_s
+                    # Tight busy-wait; perf_counter avoids drift and keeps us
+                    # holding the GIL between C calls, starving any pure-Python
+                    # work while still yielding to GIL-releasing kernels often
+                    # enough that the OS can interleave them at ms granularity.
+                    while time.perf_counter() < deadline:
+                        pass
             else:
                 time.sleep(0.005)  # idle check
 

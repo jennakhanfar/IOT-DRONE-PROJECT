@@ -370,7 +370,7 @@ MODEL_REGISTRY = {
     "facenet":        (_make_facenet,        "FaceNet InceptionResnetV1 (VGGFace2, ~23.5M params)"),
     "facenet_casia":  (_make_facenet_casia,  "FaceNet InceptionResnetV1 (CASIA-WebFace, ~23.5M params)"),
     "mobilefacenet":  (_make_mobilefacenet,  "MobileFaceNet ArcFace (WebFace600K, ~1.2M params)"),
-    "arcface_r18":    (_make_arcface_r18,    "ArcFace IResNet-18 (MS1MV2, ~12.4M params)"),
+    "arcface_r18":    (_make_arcface_r18,    "ArcFace IResNet-18 (~24M params)"),
     "arcface_r50":    (_make_arcface_r50,    "ArcFace ResNet-50 (WebFace600K, ~43M params)"),
     "arcface_r100":   (_make_arcface_r100,   "ArcFace GlintR100 (Glint360K, ~65M params)"),
     "sface":          (_make_sface,          "SFace (OpenCV Zoo, ~1.1M params)"),

@@ -127,7 +127,8 @@ def table_model_comparison(rows, out_dir):
 # ── Table B: CPU ablation (DroneFace, varying MHz) ───────────────────────────
 
 def table_cpu_ablation(rows, out_dir):
-    sel = [r for r in rows if r.get("dataset") == "droneface" and r.get("constrained")]
+    sel = [r for r in rows if r.get("dataset") == "droneface"
+           and r.get("constrained") and r.get("cpu_mhz_target") is not None]
     by_model = defaultdict(dict)  # model -> mhz -> row
     for r in sel:
         by_model[r["model_name"]][r["cpu_mhz_target"]] = r

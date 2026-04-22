@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 
-MODELS = ["sface", "mobilefacenet", "facenet", "facenet_casia",
+MODELS = ["sface", "mobilefacenet", "arcface_r18", "facenet", "facenet_casia",
           "arcface_r50", "arcface_r100"]
 
 OUT_PATH = Path("benchmark_results/baselines.json")

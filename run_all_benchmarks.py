@@ -39,6 +39,7 @@ from pathlib import Path
 DEFAULT_MODELS = [
     "sface",
     "mobilefacenet",
+    "arcface_r18",
     "facenet",
     "facenet_casia",
     "arcface_r50",
@@ -46,7 +47,7 @@ DEFAULT_MODELS = [
 ]
 
 CPU_ABLATION_MHZ = [250, 400, 650]
-CPU_ABLATION_MODELS = ["sface", "mobilefacenet"]  # light + mid for speed
+CPU_ABLATION_MODELS = ["sface", "mobilefacenet", "arcface_r18", "facenet", "facenet_casia", "arcface_r50", "arcface_r100"]
 
 OUT_DIR = Path("benchmark_results")
 
