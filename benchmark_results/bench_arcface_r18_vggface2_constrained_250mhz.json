@@ -1,0 +1,20 @@
+{
+  "accuracy": 0.4809,
+  "avg_latency_ms": 90.324,
+  "median_latency_ms": 80.206,
+  "p95_latency_ms": 155.537,
+  "fps": 11.071,
+  "model_size_mb": 91.761,
+  "parameter_count": 24025600,
+  "num_samples": 21295,
+  "num_classes": 60,
+  "peak_inference_ram_mb": 370.3,
+  "peak_inference_delta_ram_mb": 16.6,
+  "model_name": "arcface_r18",
+  "description": "ArcFace IResNet-18 (MS1MV2, ~12.4M params)",
+  "dataset": "vggface2",
+  "constrained": true,
+  "input_size": 112,
+  "cpu_mhz_target": 250,
+  "ram_mb_limit": 128
+}
