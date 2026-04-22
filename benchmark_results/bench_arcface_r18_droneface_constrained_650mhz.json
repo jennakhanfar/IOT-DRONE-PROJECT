@@ -1,0 +1,50 @@
+{
+  "accuracy": 0.868,
+  "avg_latency_ms": 55.597,
+  "median_latency_ms": 53.838,
+  "p95_latency_ms": 66.759,
+  "fps": 17.986,
+  "model_size_mb": 91.761,
+  "parameter_count": 24025600,
+  "num_samples": 1364,
+  "num_classes": 11,
+  "peak_inference_ram_mb": 296.2,
+  "peak_inference_delta_ram_mb": 10.6,
+  "model_name": "arcface_r18",
+  "description": "ArcFace IResNet-18 (MS1MV2, ~12.4M params)",
+  "dataset": "droneface",
+  "constrained": true,
+  "input_size": 112,
+  "cpu_mhz_target": 650,
+  "ram_mb_limit": 128,
+  "conditions": {
+    "accuracy_by_height": {
+      "1.5m": 0.8798,
+      "3.0m": 0.8974,
+      "4.0m": 0.8886,
+      "5.0m": 0.8065
+    },
+    "accuracy_by_distance": {
+      "2m": 0.625,
+      "4m": 0.8136,
+      "6m": 0.8864,
+      "8m": 0.95,
+      "10m": 0.9242,
+      "12m": 0.9591,
+      "14m": 0.8712,
+      "16m": 0.8
+    },
+    "accuracy_by_group": {
+      "gender": {
+        "F": {
+          "accuracy": 0.8367,
+          "n": 496
+        },
+        "M": {
+          "accuracy": 0.8859,
+          "n": 868
+        }
+      }
+    }
+  }
+}
