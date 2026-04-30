@@ -83,15 +83,15 @@ recorded, valid result.
 
 ## Models
 
-| Name            | Architecture / training data            | Size   | Notes                                     |
-|-----------------|-----------------------------------------|--------|-------------------------------------------|
-| `sface`         | SFace, OpenCV Zoo                       | ~1.1 M | Auto-downloads ONNX                       |
-| `mobilefacenet` | MobileFaceNet, WebFace600K              | ~1.2 M | InsightFace `buffalo_sc`, auto-downloads  |
-| `arcface_r18`   | ArcFace IResNet-18, MS1MV2              | ~12 M  | Needs `weights/arcface_r18.pth` manually  |
-| `facenet`       | InceptionResnetV1, VGGFace2             | ~23 M  | `facenet-pytorch`                         |
-| `facenet_casia` | InceptionResnetV1, CASIA-WebFace        | ~23 M  | `facenet-pytorch`                         |
-| `arcface_r50`   | ArcFace ResNet-50, WebFace600K          | ~43 M  | InsightFace `buffalo_l`, auto-downloads   |
-| `arcface_r100`  | ArcFace GlintR100, Glint360K            | ~65 M  | InsightFace `antelopev2`, auto-downloads  |
+| Name            | Architecture / training data            | Notes                                     |
+|-----------------|-----------------------------------------|-------------------------------------------|
+| `sface`         | SFace, OpenCV Zoo                       | Auto-downloads ONNX                       |
+| `mobilefacenet` | MobileFaceNet, WebFace600K              | InsightFace `buffalo_sc`, auto-downloads  |
+| `arcface_r18`   | ArcFace IResNet-18, MS1MV2              | Needs `weights/arcface_r18.pth` manually  |
+| `facenet`       | InceptionResnetV1, VGGFace2             | `facenet-pytorch`                         |
+| `facenet_casia` | InceptionResnetV1, CASIA-WebFace        | `facenet-pytorch`                         |
+| `arcface_r50`   | ArcFace ResNet-50, WebFace600K          | InsightFace `buffalo_l`, auto-downloads   |
+| `arcface_r100`  | ArcFace GlintR100, Glint360K            | InsightFace `antelopev2`, auto-downloads  |
 
 For ArcFace R18, download a pretrained checkpoint from
 [`insightface/arcface_torch`](https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch)
