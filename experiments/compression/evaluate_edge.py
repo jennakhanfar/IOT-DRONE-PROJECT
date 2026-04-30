@@ -2,7 +2,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .edge_tools import (
+from edge_tools import (
     DeploymentConstraints,
     build_profiled_model,
     compare_edge_variants,

@@ -1,10 +1,9 @@
 """
-Throttled benchmark for drone deployment simulation.
+Edge-profiling benchmark for compressed face-recognition backbones.
 
-Wraps edge_tools.profile_model with the process-wide constraints defined in
-drone_constraints.py (128MB RAM hard limit, ~15% of one CPU core pinned to
-core 0). This simulates the HULA drone's ARM Cortex-A ~400MHz SoC on a normal
-dev machine across Windows, macOS, and Linux.
+Wraps edge_tools.profile_model and prints a one-shot summary plus JSON for the
+selected preset/variant. CPU/RAM enforcement is not applied process-wide here;
+the preset values are used as the budget the profile is checked against.
 
 Usage:
     python throttled_benchmark.py
@@ -14,11 +13,6 @@ Usage:
 Output: prints the profile dict and writes it to
     edge_compare_throttled_<preset>_<variant>.json
 """
-
-# IMPORTANT: apply_drone_constraints() MUST run before any heavy imports
-# (torch, timm, etc.) so the RAM cap and CPU pin cover model loading too.
-from drone_constraints import apply_drone_constraints
-apply_drone_constraints()
 
 import argparse
 import json
@@ -77,7 +71,6 @@ def main() -> int:
     wallclock_s = time.perf_counter() - t0
 
     profile["throttle_meta"] = {
-        "constraints_source": "drone_constraints.apply_drone_constraints",
         "wallclock_seconds": round(wallclock_s, 3),
         "platform": platform.platform(),
         "python_version": sys.version.split()[0],

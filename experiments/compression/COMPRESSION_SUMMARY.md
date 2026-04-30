@@ -66,7 +66,7 @@ Constraint preset: `hula_high`
 |---|---|---|
 | Model size < 128MB (`hula_high` RAM) | PASS | Quantized MobileNet is 4.14MB. |
 | Runtime footprint < 128MB | PENDING | Run `throttled_benchmark.py`; reports `runtime_footprint_mb`. |
-| Single-core CPU + RAM cap + ~15% CPU simulation | PENDING | Enforced process-wide by `drone_constraints.apply_drone_constraints()` (called at the top of `throttled_benchmark.py`). Works on Windows/Mac/Linux. |
+| Single-core CPU + RAM cap + ~15% CPU simulation | PENDING | Use `DroneInferenceContext` from `src/drone_constraints.py` (wraps each inference call; invoked by `src/benchmark_recognizers.py --constrained`). Works on Windows/macOS/Linux. |
 | Accuracy retained after quantization | PENDING | Compare baseline vs quantized on validation set. |
 | K-fold mean accuracy on face dataset | PENDING | `sklearn.model_selection.KFold`, report mean +/- std. |
 | Fine-tune on drone-face dataset | PENDING | After normal-face fine-tune, run a second fine-tune pass on drone data. |
@@ -78,19 +78,17 @@ Constraint preset: `hula_high`
 ## How to reproduce
 
 1. `python -m pip install -r requirements.txt` (in a Python 3.6.7 venv).
-2. Generate throttled numbers:
+2. Generate edge-profile numbers (sandbox; budget is checked, not enforced):
    ```
+   cd experiments/compression
    python throttled_benchmark.py --preset hula_high --variant quantized
    ```
-   `drone_constraints.apply_drone_constraints()` is called at the top of the
-   script, which caps the whole process at 128MB RAM and ~15% of one CPU core
-   (pinned to core 0). The JSON output lands in
-   `edge_compare_throttled_hula_high_quantized.json`.
-3. To run any other script under the same drone simulation, add these two
-   lines at the very top (before any heavy imports):
-   ```python
-   from drone_constraints import apply_drone_constraints
-   apply_drone_constraints()
+   The JSON output lands in `edge_compare_throttled_hula_high_quantized.json`.
+3. To enforce the actual drone CPU/RAM budget around inference for the
+   face-recognition models, use the main benchmark from the repo root:
+   ```
+   python src/benchmark_recognizers.py --constrained --model mobilefacenet \
+          --dataset-root open_data_set --dataset-type droneface
    ```
 4. Replace the PENDING rows above with the values from the new JSON files.
 

@@ -1,158 +1,120 @@
+# IoT Drone Face Recognition — Benchmarks
 
-# IoT Drone Face Recognition — Benchmarking
+Benchmarks face-recognition models on a drone-style hardware budget.
 
-This project benchmarks multiple **face recognition models** under drone-like constraints.
+The detector is held fixed; only the **recognizer** is swapped. Each model is
+evaluated for accuracy, latency, model size, and feasibility under a 128 MB
+RAM / single-core CPU throttle.
 
-- **Detector (UltraFace) is fixed**
-- Only the **recognizer models** are compared
-- Focus: **accuracy, latency, and deployability**
+Datasets:
+- **VGG Face2** — general face recognition reference.
+- **DroneFace** — real drone footage with height and distance metadata.
 
-We evaluate models on:
-- **VGG Face2** (general face recognition)
-- **DroneFace** (real drone conditions with height/distance variations)
+## Layout
 
----
+```
+.
+├── src/                            main benchmark pipeline
+│   ├── benchmark_recognizers.py    run one model (or --all) on a dataset
+│   ├── drone_constraints.py        128 MB RAM + CPU-throttle context
+│   ├── run_all_benchmarks.py       full sweep orchestrator
+│   ├── aggregate_results.py        per-table CSVs from result JSONs
+│   ├── show_results.py             pretty summary tables
+│   └── measure_baselines.py        per-model baseline RSS in fresh subprocesses
+├── docs/CONSTRAINED_SETUP.md       setup + run reference
+├── experiments/compression/        isolated edge-compression sandbox
+│                                   (mobilenet/efficientnet, quant + prune)
+├── benchmark_results/              JSON outputs land here
+├── droneface_groups.csv            subject -> gender map for breakdowns
+└── requirements.txt
+```
 
-## 🚀 Quick Start
+## Install
 
-### Install dependencies
 ```bash
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+# source .venv/bin/activate     # macOS / Linux
 pip install -r requirements.txt
-````
+```
 
-### Run one model (DroneFace)
+Datasets go in the project root: `archive (1)/` (VGG Face2) and
+`open_data_set/` (DroneFace). Both are gitignored.
+
+## Run
+
+All commands assume project root as CWD.
 
 ```bash
-python benchmark_recognizers.py \
-  --model mobilefacenet \
-  --dataset-root open_data_set \
-  --dataset-type droneface
+# Single model on DroneFace
+python src/benchmark_recognizers.py \
+    --model mobilefacenet \
+    --dataset-root open_data_set \
+    --dataset-type droneface
+
+# All models on VGG Face2
+python src/benchmark_recognizers.py \
+    --all \
+    --dataset-root "archive (1)" \
+    --dataset-type vggface2
+
+# Drone simulation (128 MB RAM cap + ~15% of one CPU core)
+python src/benchmark_recognizers.py \
+    --model mobilefacenet \
+    --dataset-root open_data_set \
+    --dataset-type droneface \
+    --constrained --cpu-mhz 400
+
+# Full sweep (resumes — skips JSONs that already exist)
+python src/run_all_benchmarks.py \
+    --droneface-root open_data_set \
+    --vggface2-root  "archive (1)"
+
+# Print summary tables
+python src/show_results.py
+
+# Aggregate per-axis CSVs into benchmark_results/tables/
+python src/aggregate_results.py
 ```
 
-### Run one model (VGG Face2)
+Under `--constrained`, accuracy is unchanged; only latency and RAM headroom
+move. Heavier models may be killed by the RAM watchdog at 128 MB — that is a
+recorded, valid result.
 
-```bash
-python benchmark_recognizers.py \
-  --model mobilefacenet \
-  --dataset-root "archive (1)" \
-  --dataset-type vggface2
-```
+## Models
 
-### Run all models
+| Name            | Architecture / training data            | Size   | Notes                                     |
+|-----------------|-----------------------------------------|--------|-------------------------------------------|
+| `sface`         | SFace, OpenCV Zoo                       | ~1.1 M | Auto-downloads ONNX                       |
+| `mobilefacenet` | MobileFaceNet, WebFace600K              | ~1.2 M | InsightFace `buffalo_sc`, auto-downloads  |
+| `arcface_r18`   | ArcFace IResNet-18, MS1MV2              | ~12 M  | Needs `weights/arcface_r18.pth` manually  |
+| `facenet`       | InceptionResnetV1, VGGFace2             | ~23 M  | `facenet-pytorch`                         |
+| `facenet_casia` | InceptionResnetV1, CASIA-WebFace        | ~23 M  | `facenet-pytorch`                         |
+| `arcface_r50`   | ArcFace ResNet-50, WebFace600K          | ~43 M  | InsightFace `buffalo_l`, auto-downloads   |
+| `arcface_r100`  | ArcFace GlintR100, Glint360K            | ~65 M  | InsightFace `antelopev2`, auto-downloads  |
 
-```bash
-python benchmark_recognizers.py \
-  --all \
-  --dataset-root open_data_set \
-  --dataset-type droneface
-```
+For ArcFace R18, download a pretrained checkpoint from
+[`insightface/arcface_torch`](https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch)
+and save it as `weights/arcface_r18.pth`. Without it, the model loads with
+random weights — latency and size are still valid, but accuracy is meaningless.
 
----
+## Output
 
-## 🧪 Constrained Benchmarking
+Each per-model run produces
+`benchmark_results/bench_<model>_<dataset>_<tag>.json`. A combined
+`benchmark_combined_…json` is also written when `--all` is used. The
+DroneFace runs include accuracy breakdowns by height, distance, and (via
+`droneface_groups.csv`) gender.
 
-Simulates drone hardware limitations.
+## Edge-compression sandbox
 
-```bash
-python benchmark_recognizers.py \
-  --model mobilefacenet \
-  --dataset-root open_data_set \
-  --dataset-type droneface \
-  --constrained
-```
+`experiments/compression/` is a separate, self-contained workspace for
+exploring quantization, pruning, and distillation on lightweight torchvision
+backbones (`mobilenet_v3_small`, `efficientnet_b0`). It does **not** share
+runtime state with the main benchmark. See
+[`experiments/compression/README.md`](experiments/compression/README.md).
 
-* **Mac:** CPU constraint only
-* **Windows:** CPU + RAM constraint
+## Further reading
 
-> Accuracy does not change under constraints — only latency and feasibility.
-
----
-
-## 📊 Models in the Benchmark
-
-| Model         | Type                                     |
-| ------------- | ---------------------------------------- |
-| mobilefacenet | Lightweight (edge)                       |
-| sface         | Lightweight (OpenCV)                     |
-| facenet       | Medium                                   |
-| facenet_casia | Medium                                   |
-| arcface_r50   | Heavy                                    |
-| arcface_r100  | Very heavy                               |
-| arcface_r18   | Lightweight (optional, requires weights) |
-
----
-
-## 🎯 Goal
-
-The goal is to evaluate:
-
-* Which models perform best on **real drone data**
-* How performance changes under **domain shift** (VGG Face2 → DroneFace)
-* Which models remain **deployable under hardware constraints**
-
-Not all models are expected to run under constraints —
-**failure to load or high latency is part of the evaluation.**
-
----
-
-## 📁 Datasets
-
-* `archive (1)/` — VGG Face2 subset
-* `open_data_set/` — DroneFace dataset
-
-DroneFace includes metadata for:
-
-* **Height**
-* **Distance**
-
-The benchmark automatically reports accuracy breakdowns by these conditions.
-
----
-
-## 📈 Results
-
-Results are saved in:
-
-```
-benchmark_results/
-```
-
-Each run produces:
-
-* JSON output
-* Printed summary table
-
-To display results:
-
-```bash
-python show_results.py
-```
-
----
-
-## 📂 Key Files
-
-* `benchmark_recognizers.py` — main benchmarking pipeline
-* `show_results.py` — prints summary tables
-* `drone_constraints.py` — hardware constraint simulation
-* `requirements.txt` — dependencies
-
----
-
-## ⚠️ Notes
-
-* **SFace** → auto-downloads, works immediately
-* **MobileFaceNet / ArcFace models** → auto-download via InsightFace
-* **ArcFace R18** → requires manual weights (`weights/arcface_r18.pth`)
-
----
-
-## 💡 Summary
-
-This project focuses on **real-world feasibility**, not just accuracy.
-
-Lightweight models (e.g., MobileFaceNet, SFace) are more suitable for deployment,
-while larger models serve as high-accuracy baselines.
-
-```
-```
+- [`docs/CONSTRAINED_SETUP.md`](docs/CONSTRAINED_SETUP.md) — full setup walkthrough including the constrained runs.
+- [`experiments/compression/COMPRESSION_SUMMARY.md`](experiments/compression/COMPRESSION_SUMMARY.md) — historical notes on the compression experiments.

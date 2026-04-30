@@ -79,10 +79,14 @@ def build_plan(args):
     return plan
 
 
+_BENCH_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "benchmark_recognizers.py")
+
+
 def run_one(model, dataset, dataset_root, cpu_mhz, dry_run=False):
     """Invoke benchmark_recognizers.py as a subprocess (fresh process = clean state)."""
     cmd = [
-        sys.executable, "benchmark_recognizers.py",
+        sys.executable, _BENCH_SCRIPT,
         "--model", model,
         "--dataset-root", dataset_root,
         "--dataset-type", dataset,

@@ -28,10 +28,12 @@ MODELS = ["sface", "mobilefacenet", "arcface_r18", "facenet", "facenet_casia",
 OUT_PATH = Path("benchmark_results/baselines.json")
 
 
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Child process script: load one model, print baseline RSS in MB
 CHILD_SCRIPT = """
 import os, sys, psutil
-sys.path.insert(0, os.getcwd())
+sys.path.insert(0, sys.argv[2])
 from benchmark_recognizers import MODEL_REGISTRY
 name = sys.argv[1]
 factory, _ = MODEL_REGISTRY[name]
@@ -50,7 +52,7 @@ print("BASELINE_MB=%.2f" % rss_mb)
 
 def measure(model_name):
     proc = subprocess.Popen(
-        [sys.executable, "-c", CHILD_SCRIPT, model_name],
+        [sys.executable, "-c", CHILD_SCRIPT, model_name, _SRC_DIR],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     out, err = proc.communicate()
